@@ -3,6 +3,7 @@ import AnalyticsSummary from "./AnalyticsSummary";
 import SalesTrendChart from "./SalesTrendChart";
 import CategoryDistribution from "./CategoryDistribution";
 import PriceAnalysis from "./PriceAnalysis";
+import BulkPriceUpdater from "./BulkPriceUpdater";
 import InventoryStatus from "./InventoryStatus";
 import { Analytics, Book } from "@shared/schema";
 import { useQuery } from "@tanstack/react-query";
@@ -28,6 +29,12 @@ export default function AdminDashboard() {
 
   const isLoading = booksLoading || analyticsLoading || salesLoading || categoryLoading;
 
+  // Function to refresh data after price updates
+  const refreshData = () => {
+    queryClient.invalidateQueries({ queryKey: ['/api/books'] });
+    queryClient.invalidateQueries({ queryKey: ['/api/analytics'] });
+  };
+
   return (
     <div>
       <h1 className="font-heading font-bold text-2xl mb-6">Admin Dashboard</h1>
@@ -35,9 +42,10 @@ export default function AdminDashboard() {
       <AnalyticsSummary isLoading={isLoading} books={books} salesData={salesData} />
       
       <Tabs defaultValue="analytics" className="mt-8">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="analytics">Sales & Analytics</TabsTrigger>
           <TabsTrigger value="pricing">Price Analysis</TabsTrigger>
+          <TabsTrigger value="dynamic-pricing">Dynamic Pricing</TabsTrigger>
           <TabsTrigger value="inventory">Inventory Management</TabsTrigger>
         </TabsList>
         
@@ -61,13 +69,19 @@ export default function AdminDashboard() {
                   apiRequest('PUT', `/api/books/${bookId}`, {
                     price
                   }).then(() => {
-                    // Invalidate queries
-                    queryClient.invalidateQueries({ queryKey: ['/api/books'] });
-                    queryClient.invalidateQueries({ queryKey: ['/api/analytics'] });
+                    refreshData();
                   });
                 }
               }
             }}
+          />
+        </TabsContent>
+        
+        <TabsContent value="dynamic-pricing" className="mt-6">
+          <BulkPriceUpdater 
+            isLoading={isLoading}
+            books={books}
+            onPricesUpdated={refreshData}
           />
         </TabsContent>
         
@@ -79,7 +93,6 @@ export default function AdminDashboard() {
               // Delete book
               if (books) {
                 apiRequest('DELETE', `/api/books/${bookId}`).then(() => {
-                  // Invalidate queries
                   queryClient.invalidateQueries({ queryKey: ['/api/books'] });
                 });
               }

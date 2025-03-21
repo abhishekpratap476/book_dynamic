@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { z } from "zod";
 import { insertBookSchema } from "@shared/schema";
+import { predictOptimalPrice } from "../client/src/lib/ai";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
@@ -309,8 +310,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           marketAverage
         };
         
-        // Get current analytics entry if it exists
-        const currentAnalytics = analytics.find(a => a.bookId === book.id);
+        // Get price suggestion using our AI model
+        const priceSuggestion = predictOptimalPrice(bookData);
         
         return {
           id: book.id,
@@ -319,8 +320,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           genre: book.genre,
           currentPrice: Number(book.price),
           marketAverage,
-          suggestedPrice: currentAnalytics ? Number(currentAnalytics.suggestedPrice) : Number(book.price),
-          demandTrend: currentAnalytics?.demandTrend || "stable",
+          suggestedPrice: priceSuggestion.suggestedPrice,
+          percentChange: priceSuggestion.percentChange,
+          demandTrend: priceSuggestion.demandTrend,
+          competitivePosition: priceSuggestion.competitivePosition,
+          elasticityFactor: priceSuggestion.elasticityFactor,
           salesData: salesHistory
         };
       });

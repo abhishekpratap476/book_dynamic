@@ -1,5 +1,3 @@
-import * as brain from "brain.js";
-
 // Define types for our AI analytics
 export interface BookData {
   id: number;
@@ -22,108 +20,149 @@ export interface PriceSuggestion {
   elasticityFactor?: number;
 }
 
-// Function to predict optimal pricing
+// Function to predict optimal pricing using a rule-based approach
 export function predictOptimalPrice(bookData: BookData): PriceSuggestion {
-  // Create a simple neural network
-  const net = new brain.NeuralNetwork({
-    hiddenLayers: [4]
-  });
-
-  // Normalize sales history data
-  const maxSale = Math.max(...bookData.salesHistory, 1);
-  const normalizedSales = bookData.salesHistory.map(sale => sale / maxSale);
-  
-  // Calculate trend
-  const recentSales = normalizedSales.slice(-3);
+  // Calculate trend based on sales history
   let trend: "rising" | "stable" | "falling" = "stable";
-  if (recentSales.length >= 2) {
-    const avgChange = (recentSales[recentSales.length - 1] - recentSales[0]) / recentSales.length;
-    if (avgChange > 0.05) trend = "rising";
-    else if (avgChange < -0.05) trend = "falling";
+  
+  // Ensure we have sales history data
+  const salesHistory = bookData.salesHistory.length > 0 ? 
+    bookData.salesHistory : [0, 0, 0];
+  
+  // Calculate trend based on recent sales patterns
+  if (salesHistory.length >= 3) {
+    const recent = salesHistory.slice(-3);
+    const firstHalf = recent.slice(0, Math.floor(recent.length / 2));
+    const secondHalf = recent.slice(Math.floor(recent.length / 2));
+    
+    const firstAvg = firstHalf.reduce((sum, val) => sum + val, 0) / firstHalf.length;
+    const secondAvg = secondHalf.reduce((sum, val) => sum + val, 0) / secondHalf.length;
+    
+    const changePercent = firstAvg > 0 ? 
+      ((secondAvg - firstAvg) / firstAvg) * 100 : 
+      secondAvg > 0 ? 100 : 0;
+    
+    if (changePercent > 10) trend = "rising";
+    else if (changePercent < -10) trend = "falling";
   }
 
-  // Determine price elasticity factor based on demand trend and stock
+  // Determine price elasticity factor based on demand trend
   // Rising demand = less elastic (can increase price more)
   // Falling demand = more elastic (need to be price competitive)
-  const elasticityFactor = trend === "rising" 
-    ? 0.7 
-    : trend === "falling" 
-      ? 1.3 
-      : 1.0;
+  const elasticityFactor = trend === "rising" ? 1.15 : 
+                          trend === "falling" ? 0.85 : 1.0;
 
-  // Calculate competitive position relative to market
+  // Determine competitive position
   let competitivePosition: "premium" | "average" | "discount" = "average";
-  let marketFactor = 1.0;
   
   if (bookData.marketAverage) {
-    // How our price compares to market average
     const priceRatio = bookData.price / bookData.marketAverage;
-    
-    if (priceRatio > 1.1) {
-      competitivePosition = "premium";
-      // Premium books adjust slower to market changes
-      marketFactor = 0.9;
-    } else if (priceRatio < 0.9) {
-      competitivePosition = "discount";
-      // Discount books adjust faster to market changes
-      marketFactor = 1.1;
-    }
+    if (priceRatio > 1.1) competitivePosition = "premium";
+    else if (priceRatio < 0.9) competitivePosition = "discount";
   }
 
-  // Train with enhanced data including market position and elasticity
-  net.train([
-    // High demand scenarios (stock low, rating high, trend rising)
-    { input: { stock: 0.1, rating: 0.9, salesTrend: 0.8, market: 0.9 }, output: { priceMultiplier: 1.15 } },
-    { input: { stock: 0.2, rating: 0.8, salesTrend: 0.7, market: 1.0 }, output: { priceMultiplier: 1.10 } },
-    // Average demand scenarios
-    { input: { stock: 0.5, rating: 0.5, salesTrend: 0.5, market: 1.0 }, output: { priceMultiplier: 1.0 } },
-    { input: { stock: 0.4, rating: 0.6, salesTrend: 0.6, market: 1.1 }, output: { priceMultiplier: 1.05 } },
-    // Low demand scenarios (high stock, low ratings, falling trend)
-    { input: { stock: 0.8, rating: 0.3, salesTrend: 0.3, market: 1.1 }, output: { priceMultiplier: 0.85 } },
-    { input: { stock: 0.9, rating: 0.2, salesTrend: 0.2, market: 1.0 }, output: { priceMultiplier: 0.80 } },
-  ]);
-
-  // Normalize input for our prediction
-  const normalizedStockLevel = 1 - (bookData.stockQuantity / 100); // assuming 100 is max stock
-  const normalizedRating = bookData.rating / 5;
-  const normalizedTrend = trend === "rising" ? 0.8 : trend === "stable" ? 0.5 : 0.2;
-
-  // Make prediction using our neural network
-  const result = net.run({
-    stock: normalizedStockLevel,
-    rating: normalizedRating,
-    salesTrend: normalizedTrend,
-    market: marketFactor
-  }) as { priceMultiplier: number };
-
-  // Calculate suggested price with elasticity adjustments
-  let suggestedPrice = bookData.price * result.priceMultiplier;
+  // Calculate suggested price based on multiple factors
+  let priceMultiplier = 1.0;
   
-  // If we have market average data, use it to refine our prediction
+  // 1. Adjust based on stock level (lower stock = higher price)
+  const stockFactor = 1 - (Math.min(bookData.stockQuantity, 100) / 100) * 0.2;
+  priceMultiplier *= (1 + (stockFactor - 0.5) * 0.1);
+  
+  // 2. Adjust based on rating (higher rating = higher price)
+  const ratingFactor = (bookData.rating / 5);
+  priceMultiplier *= (1 + (ratingFactor - 0.5) * 0.15);
+  
+  // 3. Adjust based on demand trend
+  if (trend === "rising") priceMultiplier *= 1.08;
+  else if (trend === "falling") priceMultiplier *= 0.93;
+  
+  // 4. Apply market position adjustments
   if (bookData.marketAverage) {
-    // Blend our neural network suggestion with market data
-    // For premium books, we rely less on market average
-    // For discount books, we rely more on market average
-    const marketWeight = competitivePosition === "premium" ? 0.3 : 
-                         competitivePosition === "discount" ? 0.7 : 0.5;
+    const marketRatio = bookData.price / bookData.marketAverage;
     
-    // Calculate market-adjusted price
-    const marketAdjustedPrice = (bookData.marketAverage * marketWeight) + 
-                               (suggestedPrice * (1 - marketWeight));
+    // For premium books, stay premium but don't go too high
+    if (competitivePosition === "premium") {
+      const targetRatio = Math.min(marketRatio, 1.3);
+      const marketTarget = bookData.marketAverage * targetRatio;
+      const blendFactor = 0.7; // 70% own price, 30% market target
+      
+      let suggestedPrice = (bookData.price * priceMultiplier * blendFactor) + 
+                          (marketTarget * (1 - blendFactor));
+                          
+      // Ensure we don't go below market average for premium books
+      suggestedPrice = Math.max(suggestedPrice, bookData.marketAverage);
+      
+      const percentChange = ((suggestedPrice - bookData.price) / bookData.price) * 100;
+      
+      return {
+        bookId: bookData.id,
+        currentPrice: bookData.price,
+        suggestedPrice: Math.round(suggestedPrice * 100) / 100,
+        percentChange: Math.round(percentChange * 10) / 10,
+        demandTrend: trend,
+        marketAverage: bookData.marketAverage,
+        competitivePosition,
+        elasticityFactor
+      };
+    }
     
-    // Apply elasticity factor - less elastic products can deviate more from market
-    suggestedPrice = ((marketAdjustedPrice * elasticityFactor) + suggestedPrice) / 2;
+    // For discount books, maintain discount position but optimize
+    if (competitivePosition === "discount") {
+      const targetRatio = Math.max(marketRatio, 0.75);
+      const marketTarget = bookData.marketAverage * targetRatio;
+      const blendFactor = 0.5; // 50% own price, 50% market target
+      
+      let suggestedPrice = (bookData.price * priceMultiplier * blendFactor) + 
+                          (marketTarget * (1 - blendFactor));
+                          
+      // Ensure we don't go above market average for discount books
+      suggestedPrice = Math.min(suggestedPrice, bookData.marketAverage);
+      
+      const percentChange = ((suggestedPrice - bookData.price) / bookData.price) * 100;
+      
+      return {
+        bookId: bookData.id,
+        currentPrice: bookData.price,
+        suggestedPrice: Math.round(suggestedPrice * 100) / 100,
+        percentChange: Math.round(percentChange * 10) / 10,
+        demandTrend: trend,
+        marketAverage: bookData.marketAverage,
+        competitivePosition,
+        elasticityFactor
+      };
+    }
+    
+    // For average books, move price toward market average with some variance
+    const marketTarget = bookData.marketAverage * elasticityFactor;
+    const blendFactor = 0.6; // 60% own price, 40% market target
+    
+    let suggestedPrice = (bookData.price * priceMultiplier * blendFactor) + 
+                        (marketTarget * (1 - blendFactor));
+    
+    const percentChange = ((suggestedPrice - bookData.price) / bookData.price) * 100;
+    
+    return {
+      bookId: bookData.id,
+      currentPrice: bookData.price,
+      suggestedPrice: Math.round(suggestedPrice * 100) / 100,
+      percentChange: Math.round(percentChange * 10) / 10,
+      demandTrend: trend,
+      marketAverage: bookData.marketAverage,
+      competitivePosition,
+      elasticityFactor
+    };
   }
   
+  // If no market average data, just use our multiplier
+  const suggestedPrice = bookData.price * priceMultiplier;
   const percentChange = ((suggestedPrice - bookData.price) / bookData.price) * 100;
-
+  
   return {
     bookId: bookData.id,
     currentPrice: bookData.price,
-    suggestedPrice: Math.round(suggestedPrice * 100) / 100, // round to 2 decimal places
-    percentChange: Math.round(percentChange * 10) / 10, // round to 1 decimal place
+    suggestedPrice: Math.round(suggestedPrice * 100) / 100,
+    percentChange: Math.round(percentChange * 10) / 10,
     demandTrend: trend,
-    marketAverage: bookData.marketAverage,
     competitivePosition,
     elasticityFactor
   };
