@@ -7,6 +7,8 @@ export interface BookData {
   stockQuantity: number;
   rating: number;
   salesHistory: number[];
+  marketAverage?: number;
+  competitorPrices?: number[];
 }
 
 export interface PriceSuggestion {
@@ -15,17 +17,20 @@ export interface PriceSuggestion {
   suggestedPrice: number;
   percentChange: number;
   demandTrend: "rising" | "stable" | "falling";
+  marketAverage?: number;
+  competitivePosition?: "premium" | "average" | "discount";
+  elasticityFactor?: number;
 }
 
 // Function to predict optimal pricing
 export function predictOptimalPrice(bookData: BookData): PriceSuggestion {
   // Create a simple neural network
   const net = new brain.NeuralNetwork({
-    hiddenLayers: [3]
+    hiddenLayers: [4]
   });
 
   // Normalize sales history data
-  const maxSale = Math.max(...bookData.salesHistory);
+  const maxSale = Math.max(...bookData.salesHistory, 1);
   const normalizedSales = bookData.salesHistory.map(sale => sale / maxSale);
   
   // Calculate trend
@@ -37,12 +42,45 @@ export function predictOptimalPrice(bookData: BookData): PriceSuggestion {
     else if (avgChange < -0.05) trend = "falling";
   }
 
-  // Train with simplified data
-  // In a real application, we'd use more sophisticated training data
+  // Determine price elasticity factor based on demand trend and stock
+  // Rising demand = less elastic (can increase price more)
+  // Falling demand = more elastic (need to be price competitive)
+  const elasticityFactor = trend === "rising" 
+    ? 0.7 
+    : trend === "falling" 
+      ? 1.3 
+      : 1.0;
+
+  // Calculate competitive position relative to market
+  let competitivePosition: "premium" | "average" | "discount" = "average";
+  let marketFactor = 1.0;
+  
+  if (bookData.marketAverage) {
+    // How our price compares to market average
+    const priceRatio = bookData.price / bookData.marketAverage;
+    
+    if (priceRatio > 1.1) {
+      competitivePosition = "premium";
+      // Premium books adjust slower to market changes
+      marketFactor = 0.9;
+    } else if (priceRatio < 0.9) {
+      competitivePosition = "discount";
+      // Discount books adjust faster to market changes
+      marketFactor = 1.1;
+    }
+  }
+
+  // Train with enhanced data including market position and elasticity
   net.train([
-    { input: { stock: 0.1, rating: 0.9, salesTrend: 0.8 }, output: { priceMultiplier: 1.2 } },
-    { input: { stock: 0.5, rating: 0.5, salesTrend: 0.5 }, output: { priceMultiplier: 1.0 } },
-    { input: { stock: 0.9, rating: 0.2, salesTrend: 0.2 }, output: { priceMultiplier: 0.8 } },
+    // High demand scenarios (stock low, rating high, trend rising)
+    { input: { stock: 0.1, rating: 0.9, salesTrend: 0.8, market: 0.9 }, output: { priceMultiplier: 1.15 } },
+    { input: { stock: 0.2, rating: 0.8, salesTrend: 0.7, market: 1.0 }, output: { priceMultiplier: 1.10 } },
+    // Average demand scenarios
+    { input: { stock: 0.5, rating: 0.5, salesTrend: 0.5, market: 1.0 }, output: { priceMultiplier: 1.0 } },
+    { input: { stock: 0.4, rating: 0.6, salesTrend: 0.6, market: 1.1 }, output: { priceMultiplier: 1.05 } },
+    // Low demand scenarios (high stock, low ratings, falling trend)
+    { input: { stock: 0.8, rating: 0.3, salesTrend: 0.3, market: 1.1 }, output: { priceMultiplier: 0.85 } },
+    { input: { stock: 0.9, rating: 0.2, salesTrend: 0.2, market: 1.0 }, output: { priceMultiplier: 0.80 } },
   ]);
 
   // Normalize input for our prediction
@@ -50,15 +88,33 @@ export function predictOptimalPrice(bookData: BookData): PriceSuggestion {
   const normalizedRating = bookData.rating / 5;
   const normalizedTrend = trend === "rising" ? 0.8 : trend === "stable" ? 0.5 : 0.2;
 
-  // Make prediction
+  // Make prediction using our neural network
   const result = net.run({
     stock: normalizedStockLevel,
     rating: normalizedRating,
-    salesTrend: normalizedTrend
+    salesTrend: normalizedTrend,
+    market: marketFactor
   }) as { priceMultiplier: number };
 
-  // Calculate suggested price
-  const suggestedPrice = bookData.price * result.priceMultiplier;
+  // Calculate suggested price with elasticity adjustments
+  let suggestedPrice = bookData.price * result.priceMultiplier;
+  
+  // If we have market average data, use it to refine our prediction
+  if (bookData.marketAverage) {
+    // Blend our neural network suggestion with market data
+    // For premium books, we rely less on market average
+    // For discount books, we rely more on market average
+    const marketWeight = competitivePosition === "premium" ? 0.3 : 
+                         competitivePosition === "discount" ? 0.7 : 0.5;
+    
+    // Calculate market-adjusted price
+    const marketAdjustedPrice = (bookData.marketAverage * marketWeight) + 
+                               (suggestedPrice * (1 - marketWeight));
+    
+    // Apply elasticity factor - less elastic products can deviate more from market
+    suggestedPrice = ((marketAdjustedPrice * elasticityFactor) + suggestedPrice) / 2;
+  }
+  
   const percentChange = ((suggestedPrice - bookData.price) / bookData.price) * 100;
 
   return {
@@ -66,7 +122,10 @@ export function predictOptimalPrice(bookData: BookData): PriceSuggestion {
     currentPrice: bookData.price,
     suggestedPrice: Math.round(suggestedPrice * 100) / 100, // round to 2 decimal places
     percentChange: Math.round(percentChange * 10) / 10, // round to 1 decimal place
-    demandTrend: trend
+    demandTrend: trend,
+    marketAverage: bookData.marketAverage,
+    competitivePosition,
+    elasticityFactor
   };
 }
 

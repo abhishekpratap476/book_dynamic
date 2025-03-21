@@ -6,7 +6,7 @@ import PriceAnalysis from "./PriceAnalysis";
 import InventoryStatus from "./InventoryStatus";
 import { Analytics, Book } from "@shared/schema";
 import { useQuery } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 
 export default function AdminDashboard() {
   // Fetch all required data on page load

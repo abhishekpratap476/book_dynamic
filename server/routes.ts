@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { z } from "zod";
@@ -132,7 +132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Group sales by date for chart data
       const salesByDate = sales.reduce((acc, sale) => {
-        const dateStr = sale.date.toISOString().split('T')[0];
+        const dateStr = sale.date?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0];
         
         if (!acc[dateStr]) {
           acc[dateStr] = {
@@ -224,6 +224,154 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(order);
     } catch (error) {
       res.status(500).json({ message: "Failed to create order" });
+    }
+  });
+
+  // Dynamic Price Analysis and Adjustment
+  router.post("/books/analyze-prices", async (req, res) => {
+    try {
+      const books = await storage.getBooks();
+      const sales = await storage.getSales();
+      const analytics = await storage.getAnalytics();
+      
+      // Build a map of book sales history by bookId
+      const salesByBookId: Record<number, number[]> = {};
+      books.forEach(book => {
+        salesByBookId[book.id] = [];
+      });
+      
+      // Group sales by date and book
+      const salesByDate = sales.reduce((acc, sale) => {
+        const dateStr = sale.date?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0];
+        
+        if (!acc[dateStr]) {
+          acc[dateStr] = {};
+        }
+        
+        if (!acc[dateStr][sale.bookId]) {
+          acc[dateStr][sale.bookId] = 0;
+        }
+        
+        acc[dateStr][sale.bookId] += Number(sale.quantity);
+        return acc;
+      }, {} as Record<string, Record<number, number>>);
+      
+      // Sort dates and create sales history arrays
+      const sortedDates = Object.keys(salesByDate).sort();
+      
+      // Populate sales history for each book
+      sortedDates.forEach(date => {
+        const dailySales = salesByDate[date];
+        Object.keys(dailySales).forEach(bookIdStr => {
+          const bookId = parseInt(bookIdStr);
+          if (salesByBookId[bookId]) {
+            salesByBookId[bookId].push(dailySales[bookId]);
+          }
+        });
+      });
+      
+      // Calculate market averages for each genre
+      const marketAverageByGenre: Record<string, number> = {};
+      const genreBookCounts: Record<string, number> = {};
+      
+      books.forEach(book => {
+        if (!marketAverageByGenre[book.genre]) {
+          marketAverageByGenre[book.genre] = 0;
+          genreBookCounts[book.genre] = 0;
+        }
+        
+        marketAverageByGenre[book.genre] += Number(book.price);
+        genreBookCounts[book.genre] += 1;
+      });
+      
+      // Calculate the average price for each genre
+      Object.keys(marketAverageByGenre).forEach(genre => {
+        marketAverageByGenre[genre] = marketAverageByGenre[genre] / genreBookCounts[genre];
+      });
+      
+      // Generate price suggestions for each book
+      const priceSuggestions = books.map(book => {
+        // Get or generate sales history (ensure we have some data even for new books)
+        const salesHistory = salesByBookId[book.id].length > 0 
+          ? salesByBookId[book.id] 
+          : [0, 0, 0]; // default history for new books
+        
+        // Calculate market average for the book's genre
+        const marketAverage = marketAverageByGenre[book.genre] || Number(book.price);
+        
+        // Prepare data for AI analysis
+        const bookData = {
+          id: book.id,
+          price: Number(book.price),
+          stockQuantity: book.stockQuantity,
+          rating: book.rating,
+          salesHistory,
+          marketAverage
+        };
+        
+        // Get current analytics entry if it exists
+        const currentAnalytics = analytics.find(a => a.bookId === book.id);
+        
+        return {
+          id: book.id,
+          title: book.title,
+          author: book.author,
+          genre: book.genre,
+          currentPrice: Number(book.price),
+          marketAverage,
+          suggestedPrice: currentAnalytics ? Number(currentAnalytics.suggestedPrice) : Number(book.price),
+          demandTrend: currentAnalytics?.demandTrend || "stable",
+          salesData: salesHistory
+        };
+      });
+      
+      res.json({
+        priceAnalysis: priceSuggestions,
+        marketAverages: marketAverageByGenre
+      });
+    } catch (error) {
+      console.error('Error analyzing prices:', error);
+      res.status(500).json({ message: "Failed to analyze book prices" });
+    }
+  });
+
+  // Update all prices based on dynamic analysis
+  router.post("/books/update-prices", async (req, res) => {
+    try {
+      const { priceUpdates } = req.body;
+
+      if (!Array.isArray(priceUpdates)) {
+        return res.status(400).json({ message: "Invalid price updates format" });
+      }
+      
+      const results = [];
+      
+      // Apply all price updates
+      for (const update of priceUpdates) {
+        if (!update.id || typeof update.newPrice !== 'number') {
+          continue;
+        }
+        
+        const book = await storage.updateBook(update.id, { price: update.newPrice });
+        if (book) {
+          results.push({
+            id: book.id,
+            title: book.title,
+            oldPrice: update.oldPrice,
+            newPrice: Number(book.price),
+            percentChange: ((Number(book.price) - update.oldPrice) / update.oldPrice) * 100
+          });
+        }
+      }
+      
+      res.json({
+        success: true,
+        updatedBooks: results,
+        message: `Successfully updated prices for ${results.length} books`
+      });
+    } catch (error) {
+      console.error('Error updating prices:', error);
+      res.status(500).json({ message: "Failed to update book prices" });
     }
   });
 
